@@ -8,13 +8,15 @@
 	let canvasContainer: HTMLDivElement;
 	let renderer: THREE.WebGLRenderer;
 	let scene: THREE.Scene;
-	let camera: THREE.PerspectiveCamera;
+	let camera: THREE.Camera;
 	let mixer: THREE.AnimationMixer | null = null;
 	let clock: THREE.Clock;
 	let animationId: number;
 	let animationClips: THREE.AnimationClip[] = [];
 	let currentFrame: number = 1;
 	let isAnimating: boolean = false;
+	let gltfCamera: THREE.Camera | null = null;
+	let doorState: 'open' | 'closed' = 'closed';
 
 	onMount(() => {
 		if (!browser) return;
@@ -23,7 +25,7 @@
 		scene = new THREE.Scene();
 		scene.background = new THREE.Color(0x87ceeb);
 
-		// Create camera
+		// Create a temporary camera for initial setup (will be replaced by GLB camera)
 		camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 		camera.position.set(2, 2, 2);
 
@@ -46,9 +48,23 @@
 
 		// Load and play the GLB model
 		const loader = new GLTFLoader();
-		loader.load('/curved1.glb', (gltf) => {
+		loader.load('/car.glb', (gltf) => {
 			const model = gltf.scene;
 			scene.add(model);
+
+			// Look for camera in the GLB file
+			model.traverse((child) => {
+				if (child instanceof THREE.Camera) {
+					gltfCamera = child;
+					camera = child; // Use the GLB camera
+					console.log('Found camera in GLB file:', child);
+				}
+			});
+
+			// If no camera found in GLB, keep the default one
+			if (!gltfCamera) {
+				console.log('No camera found in GLB file, using default camera');
+			}
 
 			// Set up animations
 			if (gltf.animations.length > 0) {
@@ -90,25 +106,31 @@
 
 		// Handle resize
 		window.addEventListener('resize', () => {
-			camera.aspect = window.innerWidth / window.innerHeight;
-			camera.updateProjectionMatrix();
+			// Only update aspect ratio for PerspectiveCamera
+			if (camera instanceof THREE.PerspectiveCamera) {
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+			}
 			renderer.setSize(window.innerWidth, window.innerHeight);
 		});
 	});
 
-	// Function to animate to a specific frame
-	function animateToFrame(targetFrame: number) {
+	// Function to animate through a range of frames
+	function animateFrameRange(startFrame: number, endFrame: number) {
 		if (!mixer || animationClips.length === 0 || isAnimating) return;
 
 		isAnimating = true;
 
 		animationClips.forEach((clip) => {
 			const action = mixer!.clipAction(clip);
-			const startTime = action.time;
-			const endTime = (targetFrame - 1) * (clip.duration / 20); // Assuming 20 total frames
+			const startTime = (startFrame - 1) * (clip.duration / 40); // Assuming 40 total frames
+			const endTime = (endFrame - 1) * (clip.duration / 40);
 
-			// Create a smooth transition
-			const duration = 1.0; // 1 second transition
+			// Set initial time to start frame
+			action.time = startTime;
+
+			// Create a smooth transition through the frame range
+			const duration = 2.0; // 2 second transition
 			const startTimeStamp = performance.now();
 
 			function updateFrame() {
@@ -124,13 +146,49 @@
 				if (progress < 1) {
 					requestAnimationFrame(updateFrame);
 				} else {
-					currentFrame = targetFrame;
+					currentFrame = endFrame;
 					isAnimating = false;
+					// Update door state based on final frame
+					if (endFrame <= 21) {
+						doorState = 'open';
+					} else if (endFrame >= 30) {
+						doorState = 'closed';
+					}
 				}
 			}
 
 			updateFrame();
 		});
+	}
+
+	// Function to open door (frames 1-21)
+	function openDoor() {
+		if (doorState === 'closed' && !isAnimating) {
+			animateFrameRange(1, 21);
+			// If using GLB camera, it should already be positioned correctly
+			// If using default camera, position it for door viewing
+			if (!gltfCamera) {
+				camera.position.set(3, 1.5, 2);
+				if (camera instanceof THREE.PerspectiveCamera) {
+					camera.lookAt(0, 0, 0);
+				}
+			}
+		}
+	}
+
+	// Function to close door (frames 30-41)
+	function closeDoor() {
+		if (doorState === 'open' && !isAnimating) {
+			animateFrameRange(30, 41);
+			// If using GLB camera, it should already be positioned correctly
+			// If using default camera, position it for door viewing
+			if (!gltfCamera) {
+				camera.position.set(3, 1.5, 2);
+				if (camera instanceof THREE.PerspectiveCamera) {
+					camera.lookAt(0, 0, 0);
+				}
+			}
+		}
 	}
 
 	onDestroy(() => {
@@ -144,37 +202,24 @@
 	<div bind:this={canvasContainer} class="h-full w-full"></div>
 	<div class="absolute top-5 left-5 z-[100] flex gap-2.5">
 		<button
-			on:click={() => animateToFrame(1)}
-			class="cursor-pointer rounded-lg border-2 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-300
-				{currentFrame === 1
-				? 'border-green-500 bg-green-500/90 hover:bg-green-500'
-				: 'border-blue-500 bg-blue-500/90 hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-lg'}
-				{isAnimating ? 'cursor-not-allowed opacity-50' : ''}"
-			disabled={isAnimating}
+			on:click={openDoor}
+			class="rounded-lg border-2 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-300
+				{doorState === 'closed' && !isAnimating
+					? 'cursor-pointer border-green-500 bg-green-500/90 hover:-translate-y-0.5 hover:bg-green-500 hover:shadow-lg'
+					: 'cursor-not-allowed border-gray-500 bg-gray-500/50 opacity-50'}"
+			disabled={doorState !== 'closed' || isAnimating}
 		>
-			Frame 1
+			Open Door
 		</button>
 		<button
-			on:click={() => animateToFrame(10)}
-			class="cursor-pointer rounded-lg border-2 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-300
-				{currentFrame === 10
-				? 'border-green-500 bg-green-500/90 hover:bg-green-500'
-				: 'border-blue-500 bg-blue-500/90 hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-lg'}
-				{isAnimating ? 'cursor-not-allowed opacity-50' : ''}"
-			disabled={isAnimating}
+			on:click={closeDoor}
+			class="rounded-lg border-2 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-300
+				{doorState === 'open' && !isAnimating
+					? 'cursor-pointer border-red-500 bg-red-500/90 hover:-translate-y-0.5 hover:bg-red-500 hover:shadow-lg'
+					: 'cursor-not-allowed border-gray-500 bg-gray-500/50 opacity-50'}"
+			disabled={doorState !== 'open' || isAnimating}
 		>
-			Frame 10
-		</button>
-		<button
-			on:click={() => animateToFrame(20)}
-			class="cursor-pointer rounded-lg border-2 px-5 py-2.5 text-sm font-semibold text-white backdrop-blur-sm transition-all duration-300
-				{currentFrame === 20
-				? 'border-green-500 bg-green-500/90 hover:bg-green-500'
-				: 'border-blue-500 bg-blue-500/90 hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-lg'}
-				{isAnimating ? 'cursor-not-allowed opacity-50' : ''}"
-			disabled={isAnimating}
-		>
-			Frame 20
+			Close Door
 		</button>
 	</div>
 </div>
